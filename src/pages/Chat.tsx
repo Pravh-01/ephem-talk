@@ -19,35 +19,50 @@ const Chat = () => {
   } = useChat(userId);
 
   useEffect(() => {
-    // Check if user is logged in
-    const storedUserId = localStorage.getItem("userId");
-    const storedNickname = localStorage.getItem("nickname");
+    const checkAuth = async () => {
+      // Check if user is authenticated
+      const { data: { session } } = await supabase.auth.getSession();
 
-    if (!storedUserId || !storedNickname) {
-      navigate("/");
-      return;
-    }
+      if (!session) {
+        navigate("/");
+        return;
+      }
 
-    setUserId(storedUserId);
-    setNickname(storedNickname);
+      // Get user profile from database
+      const { data: userData, error } = await supabase
+        .from("users")
+        .select("*")
+        .eq("user_id", session.user.id)
+        .single();
 
-    // Update last_active timestamp
-    supabase
-      .from("users")
-      .update({ last_active: new Date().toISOString() })
-      .eq("id", storedUserId)
-      .then();
+      if (error || !userData) {
+        console.error("Failed to fetch user data:", error);
+        navigate("/");
+        return;
+      }
 
-    // Start searching for a match automatically
-    findMatch();
+      setUserId(userData.id);
+      setNickname(userData.nickname);
+
+      // Update last_active timestamp
+      await supabase
+        .from("users")
+        .update({ last_active: new Date().toISOString() })
+        .eq("id", userData.id);
+
+      // Start searching for a match automatically
+      findMatch();
+    };
+
+    checkAuth();
 
     // Cleanup on unmount
     return () => {
-      if (storedUserId) {
+      if (userId) {
         supabase
           .from("users")
           .update({ is_searching: false, current_partner_id: null })
-          .eq("id", storedUserId)
+          .eq("id", userId)
           .then();
       }
     };
@@ -61,8 +76,8 @@ const Chat = () => {
         .eq("id", userId);
     }
     
-    localStorage.removeItem("userId");
-    localStorage.removeItem("nickname");
+    // Sign out from Supabase
+    await supabase.auth.signOut();
     navigate("/");
   };
 

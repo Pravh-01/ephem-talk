@@ -16,13 +16,20 @@ export const useChat = (userId: string | null) => {
     setPartnerNickname("");
 
     try {
+      // Get current auth session
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast.error("Authentication required");
+        return;
+      }
+
       // Mark user as searching
       await supabase
         .from("users")
         .update({ is_searching: true })
         .eq("id", userId);
 
-      // Find another user who is searching
+      // Find another user who is searching (RLS will filter appropriately)
       const { data: searchingUsers, error: searchError } = await supabase
         .from("users")
         .select("*")
@@ -37,7 +44,7 @@ export const useChat = (userId: string | null) => {
         const partner = searchingUsers[0];
 
         // Create a chat session
-        const { data: session, error: sessionError } = await supabase
+        const { data: sessionData, error: sessionError } = await supabase
           .from("chat_sessions")
           .insert([
             {
@@ -70,7 +77,7 @@ export const useChat = (userId: string | null) => {
 
         setPartnerId(partner.id);
         setPartnerNickname(partner.nickname);
-        setSessionId(session.id);
+        setSessionId(sessionData.id);
         setIsMatching(false);
         toast.success(`Matched with ${partner.nickname}!`);
       } else {
@@ -117,45 +124,52 @@ export const useChat = (userId: string | null) => {
   useEffect(() => {
     if (!userId) return;
 
-    const channel = supabase
-      .channel(`user:${userId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "users",
-          filter: `id=eq.${userId}`,
-        },
-        async (payload) => {
-          const updatedUser = payload.new;
-          
-          if (updatedUser.current_partner_id && !partnerId) {
-            // We got matched by someone else
-            const { data: partner } = await supabase
-              .from("users")
-              .select("*")
-              .eq("id", updatedUser.current_partner_id)
-              .single();
+    const setupRealtimeListener = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
 
-            if (partner) {
-              setPartnerId(partner.id);
-              setPartnerNickname(partner.nickname);
-              setIsMatching(false);
-              toast.success(`Matched with ${partner.nickname}!`);
+      const channel = supabase
+        .channel(`user:${userId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "users",
+            filter: `id=eq.${userId}`,
+          },
+          async (payload) => {
+            const updatedUser = payload.new;
+            
+            if (updatedUser.current_partner_id && !partnerId) {
+              // We got matched by someone else
+              const { data: partner } = await supabase
+                .from("users")
+                .select("*")
+                .eq("id", updatedUser.current_partner_id)
+                .single();
+
+              if (partner) {
+                setPartnerId(partner.id);
+                setPartnerNickname(partner.nickname);
+                setIsMatching(false);
+                toast.success(`Matched with ${partner.nickname}!`);
+              }
+            } else if (!updatedUser.current_partner_id && partnerId) {
+              // Partner left, find new match
+              toast.info("Your partner left. Finding someone new...");
+              findMatch();
             }
-          } else if (!updatedUser.current_partner_id && partnerId) {
-            // Partner left, find new match
-            toast.info("Your partner left. Finding someone new...");
-            findMatch();
           }
-        }
-      )
-      .subscribe();
+        )
+        .subscribe();
 
-    return () => {
-      channel.unsubscribe();
+      return () => {
+        channel.unsubscribe();
+      };
     };
+
+    setupRealtimeListener();
   }, [userId, partnerId, findMatch]);
 
   return {

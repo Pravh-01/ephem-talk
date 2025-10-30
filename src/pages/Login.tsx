@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,17 @@ const Login = () => {
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
 
+  // Redirect if already authenticated
+  useEffect(() => {
+    const checkAuth = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        navigate("/chat");
+      }
+    };
+    checkAuth();
+  }, [navigate]);
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -22,20 +33,33 @@ const Login = () => {
     setIsLoading(true);
 
     try {
-      // Create a new user in the database
-      const { data, error } = await supabase
+      // Sign in anonymously with Supabase
+      const { data: authData, error: authError } = await supabase.auth.signInAnonymously();
+
+      if (authError) throw authError;
+      if (!authData.user) throw new Error("Failed to create anonymous session");
+
+      // Create user profile linked to auth user
+      const { data: userData, error: userError } = await supabase
         .from("users")
-        .insert([{ nickname: nickname.trim() }])
+        .insert([{ 
+          nickname: nickname.trim(),
+          user_id: authData.user.id 
+        }])
         .select()
         .single();
 
-      if (error) throw error;
+      if (userError) throw userError;
 
-      // Store user ID in localStorage
-      localStorage.setItem("userId", data.id);
-      localStorage.setItem("nickname", data.nickname);
+      // Assign default 'user' role
+      await supabase
+        .from("user_roles")
+        .insert([{ 
+          user_id: authData.user.id,
+          role: 'user' 
+        }]);
 
-      toast.success(`Welcome, ${data.nickname}!`);
+      toast.success(`Welcome, ${userData.nickname}!`);
       navigate("/chat");
     } catch (error: any) {
       console.error("Login error:", error);
